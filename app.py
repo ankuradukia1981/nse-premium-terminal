@@ -15,12 +15,12 @@ except ImportError:
     DHAN_AVAILABLE = False
 
 # Securely fetch credentials from Streamlit Secrets (or fallback to placeholders)
-DHAN_CLIENT_ID = st.secrets.get("DHAN_CLIENT_ID", "YOUR_CLIENT_ID_HERE")
+DHAN_CLIENT_ID = st.secrets.get("DHAN_CLIENT_ID", "1110555196")
 DHAN_ACCESS_TOKEN = st.secrets.get("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJ1c2VyUmVnaW9uIjoiUjEiLCJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzg3NDU3MDY0LCJpYXQiOjE3ODczNzA2NjQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTEwNTU1MTk2In0.7MtXNCXUM8Vx3_CMEzPIIekJGeqPHq7NdGK7K6hFNyZoLZZnT3CuRn-LPO4fKxcBplzPrfM8J4V4gHI98QOwFQ")
 
 # Initialize Dhan Client
 dhan_client = None
-if DHAN_AVAILABLE and DHAN_CLIENT_ID != "YOUR_CLIENT_ID_HERE":
+if DHAN_AVAILABLE and DHAN_CLIENT_ID != "1110555196":
     try:
         dhan_client = dhanhq(DHAN_CLIENT_ID, DHAN_ACCESS_TOKEN)
         # Quick connection test
