@@ -1,28 +1,25 @@
-
-
 import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
+import time
+import random
+import yfinance as yf
 import os
-from dotenv import load_dotenv
 
-# Load .env file (Only works when running locally on your PC)
-load_dotenv()
+# ==========================================
+# 1. DHAN API & SECRETS CONFIGURATION
+# ==========================================
+try:
+    from dhanhq import dhanhq
+    DHAN_LIB_AVAILABLE = True
+except ImportError:
+    DHAN_LIB_AVAILABLE = False
 
-# Fetch credentials: Checks Streamlit Cloud Secrets first, then local .env file
-DHAN_CLIENT_ID = st.secrets.get("DHAN_CLIENT_ID") or os.getenv("DHAN_CLIENT_ID")
-DHAN_ACCESS_TOKEN = st.secrets.get("DHAN_ACCESS_TOKEN") or os.getenv("DHAN_ACCESS_TOKEN")
+# Securely load credentials from Streamlit Secrets
+DHAN_CLIENT_ID = st.secrets.get("DHAN_CLIENT_ID", "")
+DHAN_ACCESS_TOKEN = st.secrets.get("DHAN_ACCESS_TOKEN", "")
 
-# Initialize Dhan Client
-dhan_client = None
-IS_LIVE_MODE = False
-
-if DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN:
-    try:
-        from dhanhq import dhanhq
-        dhan_client = dhanhq(DHAN_CLIENT_ID, DHAN_ACCESS_TOKEN)
-        profile = dhan_client.get_profile()
-        IS_LIVE_MODE = profile.get('status') == 'success'
-    except Exception as e:
-        st.error(f"Dhan API Connection Failed: {e}")
 # ==========================================
 # 2. PROFESSIONAL BLOOMBERG-STYLE CSS
 # ==========================================
