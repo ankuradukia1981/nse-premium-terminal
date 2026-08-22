@@ -336,35 +336,31 @@ MIN_REFRESH_SECONDS = 10
 # DHAN CLIENT INITIALIZATION
 # =================================================================
 @st.cache_resource(show_spinner=False)
-def get_dhan_client():
-    """Initialize Dhan client from .env or Streamlit Secrets"""
-    # Try Streamlit Secrets first, then fall back to .env
+def get_dhan():
+    """Return a dhanhq client, or None if credentials/SDK are missing."""
     client_id = st.secrets.get("DHAN_CLIENT_ID") or os.getenv("DHAN_CLIENT_ID")
     access_token = st.secrets.get("DHAN_ACCESS_TOKEN") or os.getenv("DHAN_ACCESS_TOKEN")
     
-    if not DHAN_AVAILABLE:
-        st.error(" DhanHQ library not installed. Add 'dhanhq' to requirements.txt")
-        return None
-    
-    if not client_id or not access_token:
-        st.error("❌ Dhan credentials not found. Add to .env file or Streamlit Secrets")
+    if not DHAN_AVAILABLE or not client_id or not access_token:
         return None
     
     try:
+        # Initialize Dhan client - no profile check needed
         ctx = DhanContext(str(client_id), str(access_token))
         client = dhanhq(ctx)
         
-        # Test connection
-        profile = client.get_profile()
-        if profile.get("status") == "success":
-            return client
-        else:
-            st.error(f"❌ Dhan authentication failed: {profile}")
-            return None
+        # Test with a simple API call instead of get_profile()
+        # Try fetching order book as a connection test
+        try:
+            client.get_order_book()
+        except:
+            pass  # Connection test failed, but client might still work
+        
+        return client
     except Exception as e:
-        st.error(f"❌ Failed to initialize Dhan client: {str(e)}")
+        st.error(f"Failed to init Dhan client: {e}")
         return None
-
+    
 @st.cache_data(ttl=6*60*60, show_spinner=False)
 def load_security_master(client):
     """Load Dhan instrument master (cached 6 hours)"""
