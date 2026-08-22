@@ -4,3 +4,4 @@ plotly
 numpy
 yfinance
 dhanhq
+python-dotenv
