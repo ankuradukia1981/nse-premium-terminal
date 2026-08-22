@@ -1,5 +1,7 @@
-   streamlit
-   pandas
-   numpy
-   plotly
-   openpyxl
+ streamlit
+dhanhq
+pandas
+plotly
+pytz
+streamlit-autorefresh
+python-dotenv
