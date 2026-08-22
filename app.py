@@ -31,7 +31,7 @@ UNDERLYINGS = {
 def get_dhan():
     """Return dhanhq client or None if credentials missing."""
     client_id = st.secrets.get("1110555196") or os.getenv("1110555196")
-    access_token = st.secrets.get("eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJ1c2VyUmVnaW9uIjoiUjEiLCJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzg3NDU3MDY0LCJpYXQiOjE3ODczNzA2NjQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTEwNTU1MTk2In0.7MtXNCXUM8Vx3_CMEzPIIekJGeqPHq7NdGK7K6hFNyZoLZZnT3CuRn-LPO4fKxcBplzPrfM8J4V4gHI98QOwFQ") or os.getenv("DHAN_ACCESS_TOKEN")
+    access_token = st.secrets.get("eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJ1c2VyUmVnaW9uIjoiUjEiLCJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzg3NDU3MDY0LCJpYXQiOjE3ODczNzA2NjQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTEwNTU1MTk2In0.7MtXNCXUM8Vx3_CMEzPIIekJGeqPHq7NdGK7K6hFNyZoLZZnT3CuRn-LPO4fKxcBplzPrfM8J4V4gHI98QOwFQ") or os.getenv("eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJ1c2VyUmVnaW9uIjoiUjEiLCJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzg3NDU3MDY0LCJpYXQiOjE3ODczNzA2NjQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTEwNTU1MTk2In0.7MtXNCXUM8Vx3_CMEzPIIekJGeqPHq7NdGK7K6hFNyZoLZZnT3CuRn-LPO4fKxcBplzPrfM8J4V4gHI98QOwFQ")
     if not client_id or not access_token or "your_" in str(access_token):
         return None
     try:
