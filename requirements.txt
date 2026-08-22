@@ -5,3 +5,4 @@ plotly
 pytz
 streamlit-autorefresh
 python-dotenv
+numpy
