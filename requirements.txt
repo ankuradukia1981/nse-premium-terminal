@@ -1,0 +1,6 @@
+streamlit
+dhanhq
+pandas
+plotly
+pytz
+streamlit-autorefresh
