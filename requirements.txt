@@ -1,5 +1,5 @@
-   streamlit
-   pandas
-   numpy
-   plotly
-   openpyxl
+  streamlit
+plotly
+pandas
+dhanhq
+requests
