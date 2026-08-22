@@ -1,4 +1,6 @@
-  streamlit
-plotly
+streamlit
 pandas
+plotly
+numpy
+yfinance
 dhanhq
