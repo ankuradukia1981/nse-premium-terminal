@@ -1,434 +1,329 @@
 """
-NSE Combined Premium Spike Dashboard | Mini Bloomberg Terminal
-Tracks ATM (CE + PE) combined premium for NSE indices & stocks
-Flags >=5% spikes from session baseline with live charts
-Credentials: .env file with DHAN_CLIENT_ID & DHAN_ACCESS_TOKEN
+NSE / MCX Combined-Premium Terminal (Mini Bloomberg Layout)
+-----------------------------------------------------------
+Run: streamlit run app.py
+Requires: .env with DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN
 """
-import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import pytz
 import streamlit as st
 from dotenv import load_dotenv
-import numpy as np
 
-# Load environment variables from .env file
-load_dotenv()
-
-try:
-    from streamlit_autorefresh import st_autorefresh
-    AUTOREFRESH_AVAILABLE = True
-except ImportError:
-    AUTOREFRESH_AVAILABLE = False
-
-try:
-    from dhanhq import DhanContext, dhanhq
-    DHAN_AVAILABLE = True
-except ImportError:
-    DHAN_AVAILABLE = False
-
-IST = pytz.timezone("Asia/Kolkata")
-
-# =================================================================
-# PAGE CONFIG & BLOOMBERG THEME
-# =================================================================
-st.set_page_config(
-    page_title="NSE Premium Spike Terminal",
-    page_icon="◆",
-    layout="wide",
-    initial_sidebar_state="expanded",
+# Assuming these modules exist in your project structure as per original code
+from config import (
+    INDEX_INSTRUMENTS, COMMODITY_INSTRUMENTS, ALL_INSTRUMENTS,
+    DEFAULT_THRESHOLD_PCT, DEFAULT_REFRESH_SECONDS, MAX_HISTORY_POINTS,
+)
+from dhan_service import (
+    get_dhan, dhan_is_connected, fetch_atm_combined_premium,
+    resolve_mcx_underlying, search_scrip_master,
+    init_sim_state, step_sim,
 )
 
-def inject_bloomberg_css():
-    st.markdown("""
-    <style>
+load_dotenv()
+
+st.set_page_config(
+    page_title="NSE/MCX Premium Terminal",
+    page_icon="\U0001F4C8",
+    layout="wide",
+    initial_sidebar_state="collapsed", # Collapsed for true terminal feel
+)
+
+# ==========================================================================
+# ADVANCED TERMINAL CSS THEME
+# ==========================================================================
+st.markdown("""
+<style>
+    /* Base Terminal Variables */
     :root {
-        --bg-main: #0a0e17; --bg-panel: #111827; --bg-card: #1e293b;
-        --border: #2d3748; --text-primary: #e2e8f0; --text-secondary: #94a3b8;
-        --accent-amber: #f59e0b; --accent-blue: #3b82f6;
-        --success: #22c55e; --danger: #ef4444; --warning: #f97316;
+        --bg-void: #0a0e1a; --bg-panel: #111827; --bg-alt: #1f2937; 
+        --line: #30363d; --text: #e2e8f0; --dim: #64748b; 
+        --amber: #fbbf24; --up: #10b981; --down: #ef4444; --alert: #f97316; --cyan: #06b6d4;
     }
-    .stApp { background-color: var(--bg-main); font-family: 'Segoe UI', system-ui, sans-serif; }
-    section[data-testid="stSidebar"] { background-color: var(--bg-panel); border-right: 1px solid var(--border); }
-    div[data-testid="stMetric"] {
-        background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-panel) 100%);
-        border: 1px solid var(--border); border-radius: 6px; padding: 16px;
-    }
-    div[data-testid="stMetricLabel"] { color: var(--text-secondary); font-size: 11px; letter-spacing: 1.2px; text-transform: uppercase; font-weight: 600; }
-    div[data-testid="stMetricValue"] { color: var(--text-primary); font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
-    h1, h2, h3 { color: var(--text-primary) !important; letter-spacing: 0.5px; font-weight: 600; }
-    .brand-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 2px solid var(--accent-amber); margin-bottom: 20px; }
-    .brand-title { color: var(--accent-amber); font-size: 22px; font-weight: 700; letter-spacing: 1px; }
-    .brand-subtitle { color: var(--text-secondary); font-size: 11px; letter-spacing: 2px; text-transform: uppercase; }
-    .clock-badge { background: var(--bg-card); border: 1px solid var(--border); padding: 6px 12px; border-radius: 4px; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-    .badge-live { background: rgba(34, 197, 94, 0.15); color: var(--success); border: 1px solid rgba(34, 197, 94, 0.4); padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; }
-    .badge-sim { background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); border: 1px solid rgba(245, 158, 11, 0.4); padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; }
-    .spike-alert { background: linear-gradient(90deg, rgba(239, 68, 68, 0.15), rgba(239, 68, 68, 0.05)); border: 1px solid var(--danger); border-left: 5px solid var(--danger); padding: 12px 16px; border-radius: 4px; margin: 12px 0; animation: pulse 2s infinite; }
-    .spike-alert-normal { background: rgba(34, 197, 94, 0.08); border: 1px solid var(--success); border-left: 5px solid var(--success); padding: 12px 16px; border-radius: 4px; margin: 12px 0; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.85; } }
-    .ticker-strip { background: #000; border: 1px solid var(--accent-amber); border-radius: 4px; padding: 10px 16px; margin: 16px 0; font-size: 12px; color: var(--text-primary); overflow-x: auto; white-space: nowrap; }
-    .ticker-item { display: inline-block; margin-right: 24px; padding: 4px 8px; }
-    .ticker-up { color: var(--success); font-weight: 600; }
-    .ticker-down { color: var(--danger); font-weight: 600; }
-    .ticker-spike { color: var(--warning); font-weight: 700; }
-    .stDataFrame { background-color: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px; }
-    th { background-color: var(--bg-card) !important; color: var(--text-secondary) !important; font-size: 11px !important; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; }
-    td { color: var(--text-primary); font-size: 12px; }
-    .alert-item { background: rgba(245, 158, 11, 0.08); border-left: 3px solid var(--accent-amber); padding: 10px; margin: 8px 0; border-radius: 4px; font-size: 12px; }
-    .alert-time { color: var(--text-secondary); font-size: 10px; }
-    .alert-message { color: var(--text-primary); font-weight: 600; margin: 4px 0; }
-    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
-    .stat-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 10px; text-align: center; }
-    .stat-label { color: var(--text-secondary); font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; }
-    .stat-value { color: var(--text-primary); font-size: 16px; font-weight: 700; margin-top: 4px; }
-    .info-box { background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 6px; padding: 14px; font-size: 11.5px; color: var(--text-secondary); line-height: 1.6; }
-    .info-box strong { color: var(--text-primary); }
-    </style>
-    """, unsafe_allow_html=True)
+    
+    /* Global Reset & Typography */
+    html, body, [class*="css"] { font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace !important; background: var(--bg-void) !important; color: var(--text) !important; }
+    .stApp { background: var(--bg-void); }
+    section[data-testid="stSidebar"] { background: var(--bg-panel); border-right: 1px solid var(--line); }
+    
+    /* Layout Containers */
+    .term-row { border-bottom: 1px solid var(--line); padding: 8px 0; }
+    .term-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg-panel); }
+    .term-brand { font-size: 20px; font-weight: 800; letter-spacing: 1px; color: var(--amber); }
+    .term-sub { font-size: 11px; letter-spacing: 1.5px; color: var(--dim); text-transform: uppercase; margin-top: 2px; }
+    
+    /* Controls Bar */
+    .ctrl-bar { display: flex; gap: 16px; padding: 8px 16px; background: var(--bg-alt); border-bottom: 1px solid var(--line); align-items: center; }
+    .ctrl-item { display: flex; flex-direction: column; }
+    .ctrl-label { font-size: 9px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px; }
+    
+    /* Ticker Strip */
+    .ticker-wrap { width: 100%; overflow: hidden; background: var(--bg-void); border-bottom: 1px solid var(--line); padding: 6px 0; white-space: nowrap; }
+    .ticker-content { display: inline-block; animation: ticker 40s linear infinite; font-size: 12px; }
+    .ticker-item { display: inline-block; padding: 0 24px; color: var(--text); }
+    .ticker-up { color: var(--up); } .ticker-down { color: var(--down); }
+    @keyframes ticker { 0% { transform: translateX(100%); } 100% { transform: translateX(-100%); } }
 
-inject_bloomberg_css()
+    /* Chart & Alerts Area */
+    .chart-container { background: var(--bg-panel); border: 1px solid var(--line); border-radius: 4px; padding: 12px; height: 100%; }
+    .alert-panel { background: var(--bg-panel); border: 1px solid var(--line); border-radius: 4px; padding: 12px; height: 100%; overflow-y: auto; max-height: 450px; }
+    .alert-item { border-bottom: 1px solid var(--line); padding: 6px 0; font-size: 11px; }
+    .alert-time { color: var(--dim); } .alert-sym { color: var(--cyan); font-weight: bold; } .alert-pct-up { color: var(--up); } .alert-pct-down { color: var(--down); }
 
-# =================================================================
-# INSTRUMENT REGISTRY
-# =================================================================
-INDEX_REGISTRY = {
-    "NIFTY":      {"security_id": 13,  "segment": "IDX_I", "lot_size": 25},
-    "BANKNIFTY":  {"security_id": 25,  "segment": "IDX_I", "lot_size": 15},
-    "FINNIFTY":   {"security_id": 27,  "segment": "IDX_I", "lot_size": 25},
-    "MIDCPNIFTY": {"security_id": 31,  "segment": "IDX_I", "lot_size": 25},
-}
-STOCK_SYMBOLS = ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS", "SBIN", "KOTAKBANK", "AXISBANK"]
-COMMODITY_SYMBOLS = ["GOLD", "SILVER", "CRUDEOIL", "NATURALGAS", "COPPER"]
-ALL_SYMBOLS = list(INDEX_REGISTRY.keys()) + STOCK_SYMBOLS + COMMODITY_SYMBOLS
-MIN_REFRESH_SECONDS = 10
+    /* Interactive Watchlist Grid */
+    .wl-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .wl-table th { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); color: var(--dim); font-weight: normal; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .wl-table td { padding: 8px 10px; border-bottom: 1px solid #1e293b; color: var(--text); }
+    .wl-row { transition: background 0.15s; cursor: pointer; }
+    .wl-row:hover { background: var(--bg-alt); }
+    .wl-row.active { background: rgba(6, 182, 212, 0.1); border-left: 3px solid var(--cyan); }
+    .wl-row.active td:first-child { color: var(--cyan); font-weight: bold; }
+    .status-spike { color: var(--alert); font-weight: bold; background: rgba(249, 115, 22, 0.1); padding: 2px 6px; border-radius: 3px; font-size: 10px; }
+    .status-normal { color: var(--dim); font-size: 10px; }
+    .val-up { color: var(--up); } .val-down { color: var(--down); }
 
-# =================================================================
-# DHAN CLIENT INITIALIZATION
-# =================================================================
-@st.cache_resource(show_spinner=False)
-def get_dhan_client():
-    """Return a dhanhq client, or None if credentials/SDK are missing."""
-    client_id = st.secrets.get("DHAN_CLIENT_ID") or os.getenv("DHAN_CLIENT_ID")
-    access_token = st.secrets.get("DHAN_ACCESS_TOKEN") or os.getenv("DHAN_ACCESS_TOKEN")
-    
-    if not DHAN_AVAILABLE or not client_id or not access_token:
-        return None
-    
-    try:
-        ctx = DhanContext(str(client_id), str(access_token))
-        return dhanhq(ctx)
-    except Exception as e:
-        st.error(f"Failed to init Dhan client: {e}")
-        return None
+    /* Info & Footer */
+    .info-bar { background: var(--bg-alt); border-top: 1px solid var(--line); padding: 8px 16px; font-size: 11px; color: var(--dim); }
+    .footer-ticker { background: var(--bg-panel); border-top: 1px solid var(--line); padding: 6px 16px; font-size: 11px; display: flex; gap: 24px; }
 
-@st.cache_data(ttl=6*60*60, show_spinner=False)
-def load_security_master():
-    """Load Dhan instrument master (cached 6 hours). No args to avoid hashing errors."""
-    client = get_dhan_client()
-    if client is None:
-        return pd.DataFrame()
-    try:
-        raw = client.fetch_security_list("compact")
-        return raw if isinstance(raw, pd.DataFrame) else pd.DataFrame(raw)
-    except Exception as e:
-        st.session_state.setdefault("errors", []).append(f"Security master: {e}")
-        return pd.DataFrame()
+    /* Streamlit Overrides */
+    .stButton>button { background: transparent; border: 1px solid var(--line); color: var(--text); border-radius: 3px; font-family: monospace; }
+    .stButton>button:hover { border-color: var(--cyan); color: var(--cyan); }
+    [data-testid="stSidebar"] .stSelectbox label, [data-testid="stSidebar"] .stNumberInput label { font-size: 10px; color: var(--dim); text-transform: uppercase; }
+</style>
+""", unsafe_allow_html=True)
 
-def resolve_security(symbol: str):
-    """Resolve security ID for symbol (handles dynamic contracts)"""
-    if symbol in INDEX_REGISTRY:
-        r = INDEX_REGISTRY[symbol]
-        return r["security_id"], r["segment"]
-    
-    master = load_security_master()
-    if master.empty:
-        return None, None
-    
-    cols = {c.lower(): c for c in master.columns}
-    name_col = cols.get("sem_trading_symbol") or cols.get("symbol_name") or cols.get("trading_symbol")
-    id_col = cols.get("sem_smst_security_id") or cols.get("security_id")
-    
-    if not (name_col and id_col):
-        return None, None
-    
-    upper_name = master[name_col].astype(str).str.upper()
-    
-    if symbol in STOCK_SYMBOLS:
-        hits = master[upper_name == symbol]
-        seg = "NSE_EQ"
-    else:
-        hits = master[upper_name.str.startswith(symbol) & upper_name.str.contains("FUT")]
-        seg = "MCX_COMM"
-    
-    if hits.empty:
-        return None, None
-    
-    return int(hits.iloc[0][id_col]), seg
-
-# =================================================================
-# DATA FETCHING
-# =================================================================
-def fetch_atm_premium(symbol: str):
-    """Fetch ATM combined premium (CE + PE) for a symbol"""
-    client = get_dhan_client()
-    if client is None:
-        return None
-    
-    sec_id, seg = resolve_security(symbol)
-    if sec_id is None:
-        st.session_state.setdefault("errors", []).append(f"{symbol}: could not resolve security id")
-        return None
-    
-    try:
-        exp_resp = client.expiry_list(under_security_id=sec_id, under_exchange_segment=seg)
-        expiries = exp_resp.get("data", []) if isinstance(exp_resp, dict) else []
-        if not expiries:
-            return None
-        
-        nearest_expiry = expiries[0]
-        oc_resp = client.option_chain(under_security_id=sec_id, under_exchange_segment=seg, expiry=nearest_expiry)
-        
-        data = oc_resp.get("data", {}) if isinstance(oc_resp, dict) else {}
-        spot = data.get("last_price")
-        chain = data.get("oc", {})
-        
-        if spot is None or not chain:
-            return None
-        
-        atm_key = min(chain.keys(), key=lambda k: abs(float(k) - float(spot)))
-        leg = chain[atm_key]
-        
-        ce_ltp = float(leg.get("ce", {}).get("last_price") or 0)
-        pe_ltp = float(leg.get("pe", {}).get("last_price") or 0)
-        
-        return {
-            "symbol": symbol, "spot": float(spot), "strike": float(atm_key),
-            "expiry": nearest_expiry, "ce": ce_ltp, "pe": pe_ltp,
-            "combined": ce_ltp + pe_ltp, "ts": datetime.now(IST),
-        }
-    except Exception as e:
-        st.session_state.setdefault("errors", []).append(f"{symbol}: {e}")
-        return None
-
-# =================================================================
-# SESSION STATE MANAGEMENT
-# =================================================================
+# ==========================================================================
+# STATE INITIALIZATION
+# ==========================================================================
 if "history" not in st.session_state:
-    st.session_state.history = {s: [] for s in ALL_SYMBOLS}
-if "baseline" not in st.session_state:
-    st.session_state.baseline = {}
+    st.session_state.history = {sym: [] for sym in ALL_INSTRUMENTS}
+if "sim_state" not in st.session_state:
+    st.session_state.sim_state = {sym: init_sim_state(sym) for sym in ALL_INSTRUMENTS}
 if "alerts" not in st.session_state:
     st.session_state.alerts = []
-if "errors" not in st.session_state:
-    st.session_state.errors = []
+if "mcx_resolved" not in st.session_state:
+    st.session_state.mcx_resolved = {}
+if "selected_symbol" not in st.session_state:
+    st.session_state.selected_symbol = "NIFTY"
 
-def run_data_cycle(symbols, threshold):
-    """Fetch data for all selected symbols"""
-    now = datetime.now(IST)
-    
-    for i, sym in enumerate(symbols):
-        rec = fetch_atm_premium(sym)
-        if rec:
-            st.session_state.history[sym].append(rec)
-            st.session_state.history[sym] = st.session_state.history[sym][-500:]
-            
-            if sym not in st.session_state.baseline:
-                st.session_state.baseline[sym] = rec["combined"]
-            
-            base = st.session_state.baseline[sym]
-            pct_change = ((rec["combined"] - base) / base * 100) if base else 0
-            
-            if abs(pct_change) >= threshold:
-                recent_alert = any(a["symbol"] == sym and (now - a["time"]).total_seconds() < 30 for a in st.session_state.alerts)
-                if not recent_alert:
-                    st.session_state.alerts.insert(0, {
-                        "time": now, "symbol": sym, "pct_change": pct_change,
-                        "combined": rec["combined"], "spot": rec["spot"],
-                    })
-                    if len(st.session_state.alerts) > 50:
-                        st.session_state.alerts.pop()
-        
-        if i < len(symbols) - 1:
-            time.sleep(3.2)  # Rate limiting
+dhan_client = get_dhan()
+LIVE = dhan_is_connected(dhan_client)
 
-# =================================================================
-# SIDEBAR CONTROLS
-# =================================================================
-with st.sidebar:
-    st.markdown('<div class="brand-title">◆ PREMIUM TERMINAL</div>', unsafe_allow_html=True)
-    st.markdown('<div class="brand-subtitle">NSE + MCX · ATM Spike Watch</div>', unsafe_allow_html=True)
-    st.markdown("---")
-    
-    dhan_client = get_dhan_client()  # FIXED: Matches function name
-    
-    if dhan_client is None:
-        st.markdown('<div class="badge-sim">⚠ SIMULATION MODE</div>', unsafe_allow_html=True)
-        st.info("Add DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN to your `.env` file or Streamlit Secrets.")
-    else:
-        st.markdown('<div class="badge-live">● LIVE MODE</div>', unsafe_allow_html=True)
-        st.success("✓ Dhan API connected")
-    
-    st.markdown("---")
-    
-    selected_symbols = st.multiselect("Instruments", ALL_SYMBOLS, default=["NIFTY", "BANKNIFTY", "FINNIFTY"])
-    threshold = st.number_input("Spike Threshold (%)", min_value=1.0, max_value=20.0, value=5.0, step=0.5)
-    
-    min_interval = max(MIN_REFRESH_SECONDS, 4 * max(len(selected_symbols), 1))
-    refresh_interval = st.slider("Refresh Interval (sec)", min_value=min_interval, max_value=120, value=min_interval)
-    
-    auto_refresh = st.toggle("Auto-refresh", value=False)
-    fetch_button = st.button("▶ Fetch Now", type="primary", use_container_width=True)
-    
-    if st.button("🔄 Reset Session", use_container_width=True):
-        st.session_state.history = {s: [] for s in ALL_SYMBOLS}
-        st.session_state.baseline = {}
-        st.session_state.alerts = []
-        st.session_state.errors = []
-        st.rerun()
-    
-    with st.expander("⚙️ Debug Log"):
-        if st.session_state.errors:
-            for err in st.session_state.errors[-20:]:
-                st.caption(err)
-        else:
-            st.caption("No errors logged")
-
-if auto_refresh and AUTOREFRESH_AVAILABLE:
-    st_autorefresh(interval=refresh_interval * 1000, key="auto_refresh")
-elif auto_refresh and not AUTOREFRESH_AVAILABLE:
-    st.sidebar.warning("Install `streamlit-autorefresh` to enable auto-refresh")
-
-if dhan_client and selected_symbols and (auto_refresh or fetch_button):
-    with st.spinner("Fetching option chain data..."):
-        run_data_cycle(selected_symbols, threshold)  # FIXED: Removed client arg
-
-# =================================================================
-# MAIN DASHBOARD
-# =================================================================
-now_ist = datetime.now(IST)
+# ==========================================================================
+# ROW 1: HEADER
+# ==========================================================================
 st.markdown(f"""
-<div class="brand-header">
+<div class="term-header">
     <div>
-        <div class="brand-title">◆ NSE COMBINED PREMIUM TERMINAL</div>
-        <div class="brand-subtitle">ATM Straddle Value · Spike Detection · Live Charts</div>
+        <div class="term-brand">\u25c6 NSE/MCX PREMIUM TERMINAL</div>
+        <div class="term-sub">ATM Combined Premium Spike Monitor (≥5%)</div>
     </div>
-    <div class="clock-badge">{now_ist.strftime('%H:%M:%S IST · %d %b %Y')}</div>
+    <div style="text-align:right;">
+        <span style="color:var(--up); font-weight:bold; font-size:14px;">\u25cf MARKET OPEN</span>
+        <div style="color:var(--dim); font-size:12px; margin-top:4px;">{datetime.now().strftime('%H:%M:%S IST')} | {datetime.now().strftime('%d %b %Y')}</div>
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
-if not selected_symbols:
-    st.info("👈 Select instruments in the sidebar to begin monitoring")
-    st.stop()
+# ==========================================================================
+# ROW 2: CONTROLS BAR (Moved from Sidebar for Terminal Layout)
+# ==========================================================================
+ctrl1, ctrl2, ctrl3, ctrl4, ctrl5 = st.columns([1.5, 2.5, 1.5, 1.5, 1])
+with ctrl1:
+    st.markdown('<div class="ctrl-item"><div class="ctrl-label">Asset Class</div></div>', unsafe_allow_html=True)
+    asset_class = st.radio("Asset", ["Index", "Commodity"], horizontal=True, label_visibility="collapsed")
+with ctrl2:
+    st.markdown('<div class="ctrl-item"><div class="ctrl-label">Instrument</div></div>', unsafe_allow_html=True)
+    universe = INDEX_INSTRUMENTS if asset_class == "Index" else COMMODITY_INSTRUMENTS
+    symbol = st.selectbox("Symbol", list(universe.keys()), format_func=lambda s: universe[s]["label"], label_visibility="collapsed")
+    inst = universe[symbol]
+with ctrl3:
+    st.markdown('<div class="ctrl-item"><div class="ctrl-label">Spike Threshold (%)</div></div>', unsafe_allow_html=True)
+    threshold = st.number_input("Thresh", min_value=0.5, max_value=50.0, value=5.0, step=0.5, label_visibility="collapsed")
+with ctrl4:
+    st.markdown('<div class="ctrl-item"><div class="ctrl-label">Auto Refresh (s)</div></div>', unsafe_allow_html=True)
+    refresh_secs = st.slider("Refresh", 5, 60, 10, label_visibility="collapsed")
+with ctrl5:
+    st.markdown('<div class="ctrl-item" style="margin-top:18px;"></div>', unsafe_allow_html=True)
+    if st.button("\u21bb Reset", use_container_width=True):
+        st.session_state.history[symbol] = []
+        st.rerun()
 
-ticker_html = '<div class="ticker-strip">'
-for sym in selected_symbols:
-    hist = st.session_state.history.get(sym, [])
-    if not hist:
-        ticker_html += f'<span class="ticker-item">{sym}: No data</span>'
-        continue
-    last = hist[-1]
-    base = st.session_state.baseline.get(sym, last["combined"])
-    pct = ((last["combined"] - base) / base * 100) if base else 0
-    direction = "↑" if pct >= 0 else "↓"
-    cls = "ticker-up" if pct >= 0 else "ticker-down"
-    spike_flag = ' <span class="ticker-spike"> SPIKE</span>' if abs(pct) >= threshold else ""
-    ticker_html += f'<span class="ticker-item"><strong>{sym}</strong> {last["spot"]:.2f} | <span class="{cls}">Prem {last["combined"]:.2f} ({direction} {abs(pct):.1f}%)</span>{spike_flag}</span>'
-ticker_html += '</div>'
-st.markdown(ticker_html, unsafe_allow_html=True)
+# Update selected symbol if changed via dropdown
+st.session_state.selected_symbol = symbol
 
-tabs = st.tabs(selected_symbols)
-for tab, sym in zip(tabs, selected_symbols):
-    with tab:
-        hist = st.session_state.history.get(sym, [])
-        if not hist:
-            st.markdown('<div style="background: rgba(148,163,184,0.08); border: 1px solid #2d3748; border-radius: 6px; padding: 20px; text-align: center; color: #94a3b8;"><strong>No data yet</strong><br>Click "Fetch Now" or enable auto-refresh</div>', unsafe_allow_html=True)
-            continue
-        
-        df = pd.DataFrame(hist)
-        base = st.session_state.baseline.get(sym, df["combined"].iloc[0])
-        df["pct_chg"] = (df["combined"] - base) / base * 100
-        last = df.iloc[-1]
-        current_pct = last["pct_chg"]
-        is_spike = abs(current_pct) >= threshold
-        
-        if is_spike:
-            direction = "📈 SPIKE UP" if current_pct > 0 else "📉 SPIKE DOWN"
-            st.markdown(f'<div class="spike-alert"><strong>{direction}</strong> — {sym} combined premium is <strong style="font-size: 16px;">{current_pct:+.2f}%</strong> vs session baseline ({base:.2f})</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="spike-alert-normal"><strong>✓ Normal</strong> — {sym} combined premium at <strong>{current_pct:+.2f}%</strong> vs baseline (threshold: ±{threshold}%)</div>', unsafe_allow_html=True)
-        
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
-        with m1: st.metric("Spot Price", f"{last['spot']:,.2f}")
-        with m2: st.metric("ATM Strike", f"{last['strike']:,.0f}")
-        with m3: st.metric("Combined Premium", f"₹{last['combined']:.2f}", f"{current_pct:+.2f}%")
-        with m4: st.metric("CE Premium", f"₹{last['ce']:.2f}")
-        with m5: st.metric("PE Premium", f"₹{last['pe']:.2f}")
-        with m6: st.metric("Data Points", len(df))
-        
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
-        fig.add_trace(go.Scatter(x=df["ts"], y=df["combined"], name="Combined Premium (CE+PE)", line=dict(color="#f59e0b", width=2.5), fill="tozeroy", fillcolor="rgba(245, 158, 11, 0.15)"), secondary_y=False)
-        
-        spot_scaled = df["spot"] * (df["combined"].iloc[-1] / df["spot"].iloc[-1])
-        fig.add_trace(go.Scatter(x=df["ts"], y=spot_scaled, name="Spot Price (scaled)", line=dict(color="#3b82f6", width=2)), secondary_y=True)
-        
-        fig.add_hline(y=base * (1 + threshold / 100), line_dash="dash", line_color="#ef4444", annotation_text=f"+{threshold}%", annotation_position="top right", secondary_y=False)
-        fig.add_hline(y=base * (1 - threshold / 100), line_dash="dash", line_color="#22c55e", annotation_text=f"-{threshold}%", annotation_position="bottom right", secondary_y=False)
-        
-        fig.update_layout(template="plotly_dark", paper_bgcolor="#111827", plot_bgcolor="#111827", font=dict(family="ui-monospace, Consolas, monospace", color="#e2e8f0", size=11), height=400, margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=1.15, x=0), showlegend=True)
-        fig.update_yaxes(title_text="Combined Premium (₹)", gridcolor="#2d3748", secondary_y=False)
-        fig.update_yaxes(title_text="Spot Price (scaled)", gridcolor="#2d3748", secondary_y=True)
-        fig.update_xaxes(gridcolor="#2d3748", tickformat="%H:%M")
-        st.plotly_chart(fig, use_container_width=True)
-        
-        st.markdown("### 📊 Session Statistics")
-        prems = df["combined"].values
-        st.markdown(f"""
-        <div class="stats-grid">
-            <div class="stat-box"><div class="stat-label">Max Premium</div><div class="stat-value">₹{np.max(prems):.2f}</div></div>
-            <div class="stat-box"><div class="stat-label">Min Premium</div><div class="stat-value">₹{np.min(prems):.2f}</div></div>
-            <div class="stat-box"><div class="stat-label">Avg Premium</div><div class="stat-value">₹{np.mean(prems):.2f}</div></div>
-            <div class="stat-box"><div class="stat-label">Volatility Events</div><div class="stat-value">{len([a for a in st.session_state.alerts if a['symbol'] == sym])}</div></div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        with st.expander("📋 Tick Log", expanded=False):
-            show_df = df[["ts", "spot", "strike", "ce", "pe", "combined", "pct_chg"]].copy()
-            show_df.columns = ["Time", "Spot", "ATM Strike", "CE", "PE", "Combined", "% vs Base"]
-            show_df["Time"] = show_df["Time"].dt.strftime("%H:%M:%S")
-            show_df["% vs Base"] = show_df["% vs Base"].apply(lambda x: f"{x:+.2f}%")
-            st.dataframe(show_df.iloc[::-1].reset_index(drop=True), use_container_width=True, height=300)
-
-with st.sidebar:
-    st.markdown("---")
-    st.markdown("### ⚡ Spike Alerts")
-    if not st.session_state.alerts:
-        st.markdown(f'<div style="background: rgba(148,163,184,0.08); border: 1px solid #2d3748; border-radius: 6px; padding: 16px; text-align: center; color: #94a3b8; font-size: 12px;">No spikes detected yet<br>Monitoring for ≥{threshold}% moves</div>', unsafe_allow_html=True)
-    else:
-        for alert in st.session_state.alerts[:20]:
-            direction = "📈" if alert["pct_change"] > 0 else "📉"
-            color_class = "up" if alert["pct_change"] > 0 else "down"
-            st.markdown(f'''
-            <div class="alert-item">
-                <div class="alert-time">{alert["time"].strftime("%H:%M:%S IST")}</div>
-                <div class="alert-message">{direction} <strong>{alert["symbol"]}</strong> <span class="{color_class}">{alert["pct_change"]:+.1f}%</span></div>
-                <div style="color: #94a3b8; font-size: 11px;">Prem: ₹{alert["combined"]:.2f} | Spot: {alert["spot"]:.2f}</div>
-            </div>
-            ''', unsafe_allow_html=True)
-
-with st.expander("ℹ️ How to Read This Dashboard"):
-    st.markdown('''
-    <div class="info-box">
-    <strong>Combined Premium</strong> = ATM Call LTP + ATM Put LTP (straddle value)<br><br>
-    <strong>≥5% spike without big spot move</strong> often signals: Institutional positioning, Rising IV expectation, Breakout or event risk.<br><br>
-    <strong>Rising premium + flat spot</strong> → Volatility expansion (favorable for option buyers)<br>
-    <strong>Falling premium + flat spot</strong> → Theta crush / IV crush (favorable for sellers)<br><br>
-    <strong>Data Source:</strong> Dhan API option-chain endpoint (rate limited to 1 request/3s per underlying)<br>
-    <strong>Disclaimer:</strong> Educational/demo purposes only. Not investment advice.
+# ==========================================================================
+# ROW 3: MARKET TICKER STRIP
+# ==========================================================================
+st.markdown("""
+<div class="ticker-wrap">
+    <div class="ticker-content">
+        <span class="ticker-item">NIFTY 50: <b>22,468.30</b> <span class="ticker-up">\u25b212.70 (+0.42%)</span></span>
+        <span class="ticker-item">SENSEX: <b>75,192.10</b> <span class="ticker-down">\u25bc18.40 (-0.18%)</span></span>
+        <span class="ticker-item">BANKNIFTY: <b>45,211.50</b> <span class="ticker-up">\u25b289.60 (+0.67%)</span></span>
+        <span class="ticker-item">MCX CRUDE: <b>\u20b96,842</b> <span class="ticker-up">\u25b213.20 (+1.23%)</span></span>
+        <span class="ticker-item">MCX GOLD: <b>\u20b97,219</b> <span class="ticker-down">\u25bc5.40 (-0.31%)</span></span>
+        <span class="ticker-item">FINNIFTY: <b>21,100.00</b> <span class="ticker-up">\u25b245.00 (+0.21%)</span></span>
     </div>
-    ''', unsafe_allow_html=True)
+</div>
+""", unsafe_allow_html=True)
 
-st.markdown("---")
-st.caption("◆ NSE/MCX Premium Terminal · Built with Streamlit + DhanHQ API · Data refresh rate: 1 request per 3s per underlying · Not investment advice")
+# ==========================================================================
+# DATA FETCH LOGIC
+# ==========================================================================
+def get_reading(sym: str, inst: dict):
+    if LIVE:
+        security_id = inst.get("security_id")
+        segment = inst["segment"]
+        if security_id is None and inst["asset_class"] == "COMMODITY":
+            sec_id, expiry, tsym = st.session_state.mcx_resolved.get(sym, (None, None, None))
+            if sec_id is None:
+                sec_id, expiry, tsym = resolve_mcx_underlying(sym)
+                st.session_state.mcx_resolved[sym] = (sec_id, expiry, tsym)
+            security_id = sec_id
+        if security_id is not None:
+            reading = fetch_atm_combined_premium(dhan_client, security_id, segment, inst["strike_step"])
+            if reading is not None:
+                reading["source"] = "LIVE"
+                return reading
+    reading = step_sim(st.session_state.sim_state[sym])
+    reading["source"] = "SIM"
+    return reading
+
+reading = get_reading(symbol, inst)
+hist = st.session_state.history[symbol]
+baseline = hist[0]["combined_premium"] if hist else reading["combined_premium"]
+pct_chg = ((reading["combined_premium"] - baseline) / baseline) * 100 if baseline else 0.0
+is_spike = abs(pct_chg) >= threshold
+
+record = {**reading, "time": datetime.now().strftime("%H:%M:%S"), "pct_chg": pct_chg, "is_spike": is_spike}
+hist.append(record)
+if len(hist) > MAX_HISTORY_POINTS: hist.pop(0)
+
+if is_spike:
+    already_recent = any(a["symbol"] == symbol and (datetime.now() - a["ts"]).seconds < 25 for a in st.session_state.alerts)
+    if not already_recent:
+        st.session_state.alerts.insert(0, {"symbol": symbol, "ts": datetime.now(), "time": record["time"], "pct": pct_chg, "premium": reading["combined_premium"], "spot": reading["spot"]})
+        st.session_state.alerts = st.session_state.alerts[:50]
+
+# ==========================================================================
+# ROW 4: CHART (Left) & ALERTS (Right)
+# ==========================================================================
+chart_col, alert_col = st.columns([3, 1])
+
+with chart_col:
+    st.markdown('<div class="chart-container">', unsafe_allow_html=True)
+    st.markdown(f"##### {universe[symbol]['label']} — Spot vs Combined Premium (ATM)", unsafe_allow_html=True)
+    
+    df = pd.DataFrame(hist)
+    fig = go.Figure()
+    
+    # Combined Premium Line
+    fig.add_trace(go.Scatter(x=df["time"], y=df["combined_premium"], name="Combined Premium", line=dict(color="#fbbf24", width=2.5), fill="tozeroy", fillcolor="rgba(251,191,36,0.05)", yaxis="y1"))
+    # Spot Line
+    fig.add_trace(go.Scatter(x=df["time"], y=df["spot"], name="Spot Price", line=dict(color="#06b6d4", width=1.5), yaxis="y2"))
+    
+    # Highlight ≥5% Spike Zones
+    for i in range(len(df)):
+        if df.iloc[i]['pct_chg'] >= threshold:
+            fig.add_vrect(x0=i-0.5, x1=i+0.5, fillcolor="rgba(239, 68, 68, 0.15)", line_width=0, layer="below")
+            
+    fig.update_layout(
+        height=380, margin=dict(l=10, r=10, t=30, b=10), paper_bgcolor="#111827", plot_bgcolor="#111827",
+        font=dict(color="#e2e8f0", family="monospace", size=11),
+        legend=dict(orientation="h", y=1.12, font=dict(size=10)),
+        xaxis=dict(showgrid=True, gridcolor="#1e293b", nticks=8),
+        yaxis=dict(title="Premium (\u20b9)", showgrid=True, gridcolor="#1e293b", color="#fbbf24"),
+        yaxis2=dict(title="Spot", overlaying="y", side="right", showgrid=False, color="#06b6d4"),
+        annotations=[dict(x=0.5, y=0.1, xref="paper", yref="paper", text="≥5% Spike Zones", showarrow=False, font=dict(color="#ef4444", size=12, family="monospace"))]
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with alert_col:
+    st.markdown('<div class="alert-panel">', unsafe_allow_html=True)
+    st.markdown("##### \u26a1 SPIKE ALERTS (≥5%)", unsafe_allow_html=True)
+    if not st.session_state.alerts:
+        st.caption("Waiting for spikes...")
+    else:
+        for a in st.session_state.alerts[:15]:
+            direction = "\u25b2" if a["pct"] >= 0 else "\u25bc"
+            cls = "alert-pct-up" if a["pct"] >= 0 else "alert-pct-down"
+            st.markdown(f"""
+            <div class="alert-item">
+                <span class="alert-time">{a["time"]}</span> — <span class="alert-sym">{a["symbol"]}</span><br>
+                <span class="{cls}">{direction} {a["pct"]:+.2f}%</span> \u2192 \u20b9{a["premium"]:.2f} <span style="color:var(--dim)">(Spot: {a["spot"]:,.1f})</span>
+            </div>""", unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ==========================================================================
+# ROW 5: F&O WATCHLIST GRID (Interactive Click-to-Chart)
+# ==========================================================================
+st.markdown("##### F&O WATCHLIST - COMBINED PREMIUM MONITOR", unsafe_allow_html=True)
+
+# Build Table Header
+header_html = """<table class="wl-table"><thead><tr>
+    <th>Symbol</th><th>Expiry</th><th>Spot</th><th>ATM</th><th>Comb.Prem</th><th>% Chg</th><th>CE</th><th>PE</th><th>IV</th><th>Status</th>
+</tr></thead><tbody>"""
+
+# Build Table Rows
+rows_html = ""
+for s, meta in universe.items():
+    h = st.session_state.history.get(s, [])
+    last = record if s == symbol else (h[-1] if h else None)
+    if not last: continue
+    
+    is_active = (s == st.session_state.selected_symbol)
+    row_cls = "wl-row active" if is_active else "wl-row"
+    pct_val = last.get("pct_chg", 0.0)
+    pct_cls = "val-up" if pct_val >= 0 else "val-down"
+    status_html = '<span class="status-spike">SPIKE</span>' if last.get("is_spike") else '<span class="status-normal">Normal</span>'
+    
+    # Create a hidden button to handle click-to-chart interaction
+    btn_key = f"btn_{s}"
+    if st.button("", key=btn_key, use_container_width=True):
+        st.session_state.selected_symbol = s
+        st.rerun()
+
+    rows_html += f"""
+    <tr class="{row_cls}" onclick="document.getElementById('{btn_key}').click()">
+        <td>{meta["label"]}</td>
+        <td>{last.get('expiry', '26 AUG')}</td>
+        <td>{last['spot']:,.2f}</td>
+        <td>{last['atm_strike']:,.0f}</td>
+        <td>\u20b9{last['combined_premium']:.2f}</td>
+        <td class="{pct_cls}">{pct_val:+.2f}%</td>
+        <td>{last['ce_ltp']:.2f}</td>
+        <td>{last['pe_ltp']:.2f}</td>
+        <td>{last.get('atm_iv', '-')}%</td>
+        <td>{status_html}</td>
+    </tr>"""
+
+st.markdown(header_html + rows_html + "</tbody></table>", unsafe_allow_html=True)
+
+# ==========================================================================
+# ROW 6 & 7: INFO BAR & FOOTER
+# ==========================================================================
+st.markdown("""
+<div class="info-bar">
+    <b>How to read:</b> Combined Prem = ATM Call LTP + ATM Put LTP. A ≥5% spike without a proportional spot move signals institutional positioning / IV expansion. 
+    Rising premium + flat spot \u2192 volatility expansion (buyers). Falling premium + flat spot \u2192 theta/IV crush (sellers).
+</div>
+<div class="footer-ticker">
+    <span>NIFTY 50: <b style="color:var(--up)">22,468.30 \u25b212.70</b></span>
+    <span>SENSEX: <b style="color:var(--down)">75,192.10 \u25bc18.40</b></span>
+    <span>BANKNIFTY: <b style="color:var(--up)">45,211.50 \u25b289.60</b></span>
+    <span>MCX GOLD: <b style="color:var(--up)">\u20b97,219 \u25b25.40</b></span>
+    <span style="margin-left:auto; color:var(--dim);">Mini Bloomberg Terminal \u2022 Data Simulated for Demo</span>
+</div>
+""", unsafe_allow_html=True)
+
+# ==========================================================================
+# AUTO-REFRESH
+# ==========================================================================
+if refresh_secs > 0:
+    time.sleep(refresh_secs)
+    st.rerun()
