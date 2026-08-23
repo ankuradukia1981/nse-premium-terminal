@@ -1,0 +1,8 @@
+premium-terminal/
+├── app.py              # Main Streamlit application
+├── requirements.txt    # Python dependencies
+├── .env               # API credentials (not in git)
+├── README.md          # This file
+└── utils/
+    ├── __init__.py
+    └── dhan_client.py # DhanHQ API wrapper
